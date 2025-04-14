@@ -14,26 +14,20 @@ import random
 # Функция для отправки сообщения в Telegram
 def send_to_telegram(bot_token, chat_id, message):
     try:
-        print(f"Пытаемся отправить сообщение в Telegram. Длина сообщения: {len(message)}")
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         data = {
             "chat_id": chat_id,
             "text": message,
             "parse_mode": "HTML"
         }
-        print(f"Отправляем запрос на URL: {url}")
-        print(f"Данные запроса: {data}")
-        response = requests.post(url, data=data)
-        print(f"Получен ответ от Telegram API. Код ответа: {response.status_code}")
-        print(f"Текст ответа: {response.text}")
+        response = requests.post(url, json=data)
         if response.status_code == 200:
-            print("Сообщение успешно отправлено в Telegram")
+            print("✅ Сообщение успешно отправлено в Telegram")
         else:
-            print(f"Ошибка при отправке сообщения в Telegram: {response.status_code}")
-            print(response.text)
+            print(f"❌ Ошибка отправки сообщения в Telegram: {response.status_code}")
+            print(f"Ответ сервера: {response.text}")
     except Exception as e:
-        print(f"Ошибка при отправке сообщения в Telegram: {str(e)}")
-        print(f"Полный стек ошибки:")
+        print(f"❌ Ошибка при отправке сообщения в Telegram: {str(e)}")
         traceback.print_exc()
 
 # Функция для получения информации о позициях
@@ -284,59 +278,88 @@ def send_closed_positions_to_telegram(positions, bot_token, chat_id):
 
 # Функция для получения и отправки информации о позициях
 def get_and_send_positions(driver, wait, bot_token, chat_id, old_positions=None):
-    print("Начинаем получение и отправку информации о позициях")
-    
-    # Проверяем, не произошел ли выход из системы
-    if check_and_handle_login(driver, wait):
-        print("Произошел автоматический выход из системы. Выполняем вход...")
-        # Даем время на полную загрузку страницы после входа
-        time.sleep(20)
-        # В этом случае пропускаем текущую итерацию, сохраняя старые позиции
-        return old_positions
-    
-    # Ждем загрузки страницы
-    print("Ждем загрузки страницы...")
-    time.sleep(14)
-    
-    # Проверяем, что страница действительно загрузилась
     try:
-        # Пытаемся найти основные элементы страницы
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "div.bn-web-table"))
-        )
-        print("Страница успешно загружена")
-    except TimeoutException:
-        print("Ошибка загрузки страницы. Возвращаем старые позиции.")
-        return old_positions
-    
-    # Получаем информацию о позициях
-    print("Получаем информацию о позициях...")
-    positions = get_positions(driver, wait)
-    
-    # Проверяем, не получили ли мы пустой список позиций из-за проблем с загрузкой
-    if not positions and old_positions:
-        print("Получен пустой список позиций. Проверяем, не связано ли это с проблемами загрузки...")
-        # Проверяем, загружена ли страница корректно
-        try:
-            # Пытаемся найти основные элементы страницы
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "div.bn-web-table"))
-            )
-            print("Страница загружена, но позиции не найдены. Возможно, это временная проблема.")
-            # Возвращаем старые позиции, чтобы избежать ложных уведомлений
-            return old_positions
-        except TimeoutException:
-            print("Страница не загружена корректно. Возможно, проблемы с соединением.")
-            # Возвращаем старые позиции
-            return old_positions
-    
-    if positions:
-        print(f"Получено {len(positions)} позиций")
-        # Сравниваем с предыдущими позициями и отправляем только новые
-        return compare_and_send_new_positions(old_positions, positions, bot_token, chat_id)
-    else:
-        print("Не удалось получить информацию о позициях")
-        # Возвращаем старые позиции, чтобы избежать ложных уведомлений
+        # Получаем все позиции
+        positions = driver.find_elements(By.CSS_SELECTOR, "tr.bn-web-table-row")
+        if not positions:
+            print("ℹ️ Позиции не найдены")
+            return None
+
+        print(f"📊 Найдено {len(positions)} позиций")
+        
+        # Если это первая проверка, просто сохраняем позиции
+        if old_positions is None:
+            print("ℹ️ Первичная проверка позиций")
+            return positions
+
+        # Сравниваем старые и новые позиции
+        new_positions = []
+        for position in positions:
+            try:
+                cells = position.find_elements(By.CSS_SELECTOR, "td.bn-web-table-cell")
+                if len(cells) >= 6:
+                    symbol = cells[0].find_element(By.CSS_SELECTOR, "div.name").text
+                    direction = "Long" if "bg-Buy" in cells[0].find_element(By.CSS_SELECTOR, "div.dir").get_attribute("class") else "Short"
+                    size = cells[1].text
+                    entry_price = cells[2].text
+                    mark_price = cells[3].text
+                    time_str = cells[4].text
+                    pnl_elements = cells[5].find_elements(By.CSS_SELECTOR, "span.Number")
+                    pnl_value = pnl_elements[0].text if pnl_elements else "N/A"
+                    pnl_percentage = pnl_elements[1].text if len(pnl_elements) > 1 else "N/A"
+                    
+                    position_info = {
+                        'symbol': symbol,
+                        'direction': direction,
+                        'size': size,
+                        'entry_price': entry_price,
+                        'mark_price': mark_price,
+                        'time': time_str,
+                        'pnl_value': pnl_value,
+                        'pnl_percentage': pnl_percentage
+                    }
+                    
+                    # Проверяем, является ли это новой позицией
+                    is_new = True
+                    for old_pos in old_positions:
+                        try:
+                            old_cells = old_pos.find_elements(By.CSS_SELECTOR, "td.bn-web-table-cell")
+                            if len(old_cells) >= 6:
+                                old_symbol = old_cells[0].find_element(By.CSS_SELECTOR, "div.name").text
+                                old_direction = "Long" if "bg-Buy" in old_cells[0].find_element(By.CSS_SELECTOR, "div.dir").get_attribute("class") else "Short"
+                                if old_symbol == symbol and old_direction == direction:
+                                    is_new = False
+                                    break
+                        except:
+                            continue
+                    
+                    if is_new:
+                        new_positions.append(position_info)
+                        # Формируем и отправляем сообщение
+                        message = f"🆕 <b>Новая позиция:</b>\n\n" \
+                                 f"📊 <b>Символ:</b> {symbol}\n" \
+                                 f"📈 <b>Направление:</b> {direction}\n" \
+                                 f"📏 <b>Размер:</b> {size}\n" \
+                                 f"💰 <b>Цена входа:</b> {entry_price}\n" \
+                                 f"📊 <b>Текущая цена:</b> {mark_price}\n" \
+                                 f"⏰ <b>Время:</b> {time_str}\n" \
+                                 f"💵 <b>PNL:</b> {pnl_value} ({pnl_percentage})"
+                        
+                        send_to_telegram(bot_token, chat_id, message)
+            except Exception as e:
+                print(f"❌ Ошибка при обработке позиции: {str(e)}")
+                traceback.print_exc()
+                continue
+        
+        if new_positions:
+            print(f"✅ Найдено {len(new_positions)} новых позиций")
+        else:
+            print("ℹ️ Новых позиций не найдено")
+            
+        return positions
+    except Exception as e:
+        print(f"❌ Ошибка при получении позиций: {str(e)}")
+        traceback.print_exc()
         return old_positions
 
 # Функция для проверки и обработки процесса входа в систему
@@ -427,481 +450,300 @@ def check_and_handle_login(driver, wait):
         print(f"Ошибка при попытке входа: {str(e)}")
         return False
 
-def login_binance():
-    # Настройка опций Chrome
-    options = uc.ChromeOptions()
-    options.add_argument('--start-maximized')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    
-    # Инициализация драйвера Chrome
-    driver = None
+def check_all_conditions(driver, wait):
     try:
-        driver = uc.Chrome(options=options)
-    except Exception as e:
-        print(f"Ошибка при инициализации драйвера: {str(e)}")
-        print("Пробуем еще раз через 10 секунд...")
-        time.sleep(10)
+        print("\n=== Начинаем проверку всех условий ===")
+        
+        # 1. Проверка никнейма Botir_Nomozov
         try:
-            driver = uc.Chrome(options=options)
+            nickname_element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#dashboard-userinfo-nickname")))
+            nickname_text = nickname_element.text
+            print(f"Найден никнейм: {nickname_text}")
+            if "Botir_Nomozov" not in nickname_text:
+                print("❌ Неверный никнейм! Ожидался Botir_Nomozov")
+                return False
+            print("✅ Никнейм Botir_Nomozov подтвержден")
         except Exception as e:
-            print(f"Снова ошибка при инициализации драйвера: {str(e)}")
-            print("Пробуем еще раз через 30 секунд...")
-            time.sleep(30)
-            driver = uc.Chrome(options=options)
-    
-    # Открытие страницы лидерборда
-    try:
-        print("Переходим на страницу профиля пользователя в лидерборде...")
-        driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-        print("Успешно перешли на страницу профиля пользователя в лидерборде!")
-    except WebDriverException as e:
-        print(f"Ошибка при подключении к Binance: {str(e)}")
-        print("Пожалуйста, включите VPN вручную и нажмите Enter, когда будете готовы...")
-        input()
+            print("❌ Ошибка при проверке никнейма:", str(e))
+            return False
+
+        # 2. Проверка кнопки Log In
         try:
-            driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-        except WebDriverException:
-            print("Все еще не удается подключиться к Binance. Пожалуйста, проверьте VPN и нажмите Enter...")
-            input()
-            driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-    
-    # Бесконечный цикл для повторных попыток
+            login_buttons = driver.find_elements(By.CSS_SELECTOR, "a.link.cursor-pointer.text-TextLink.no-underline[href='/login']")
+            if login_buttons:
+                print("❌ Обнаружена кнопка Log In - требуется повторный вход")
+                return False
+            print("✅ Кнопка Log In не найдена - пользователь в системе")
+        except Exception as e:
+            print("❌ Ошибка при проверке кнопки Log In:", str(e))
+            return False
+
+        # 3. Проверка таблицы с позициями
+        try:
+            table = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.bn-web-table")))
+            print("✅ Таблица с позициями найдена")
+        except Exception as e:
+            print("❌ Ошибка при поиске таблицы с позициями:", str(e))
+            return False
+
+        # 4. Проверка строк с позициями
+        try:
+            positions = driver.find_elements(By.CSS_SELECTOR, "tr.bn-web-table-row")
+            print(f"✅ Найдено {len(positions)} позиций")
+        except Exception as e:
+            print("❌ Ошибка при поиске позиций:", str(e))
+            return False
+
+        # 5. Проверка URL
+        current_url = driver.current_url
+        expected_url = "futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2"
+        if expected_url not in current_url:
+            print(f"❌ Неверный URL: {current_url}")
+            return False
+        print("✅ URL подтвержден")
+
+        print("=== Все проверки пройдены успешно ===\n")
+        return True
+    except Exception as e:
+        print("❌ Критическая ошибка при проверке условий:", str(e))
+        traceback.print_exc()
+        return False
+
+def handle_login_process(driver, wait):
+    try:
+        print("\n=== Начинаем процесс входа ===")
+        
+        # 1. Поиск и нажатие кнопки Log In
+        login_link = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.link.cursor-pointer.text-TextLink.no-underline[href='/login']")))
+        print("✅ Найдена кнопка Log In")
+        login_link.click()
+        time.sleep(5)
+        
+        # 2. Поиск и нажатие кнопки Continue with Telegram
+        telegram_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button[aria-label='Continue with Telegram']")))
+        print("✅ Найдена кнопка Continue with Telegram")
+        telegram_button.click()
+        time.sleep(5)
+        
+        # 3. Поиск и нажатие кнопки Connect
+        connect_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button.bn-button.bn-button__primary.data-size-large.w-full.mt-6")))
+        print("✅ Найдена кнопка Connect")
+        connect_button.click()
+        
+        print("⏳ Ожидание входа в систему...")
+        time.sleep(20)
+        
+        # 4. Возврат на страницу лидерборда
+        print("Переход на страницу лидерборда...")
+        driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
+        time.sleep(15)
+        
+        print("=== Процесс входа завершен ===\n")
+        return True
+    except Exception as e:
+        print("❌ Ошибка при процессе входа:", str(e))
+        traceback.print_exc()
+        return False
+
+def check_vpn_connection():
+    try:
+        print("🔍 Проверяем подключение к VPN...")
+        # Здесь можно добавить проверку подключения к VPN
+        # Например, проверку IP или доступности определенных сервисов
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка при проверке VPN: {str(e)}")
+        return False
+
+def login_binance():
     while True:
         try:
-            wait = WebDriverWait(driver, 20)
+            # Настройка опций Chrome
+            options = uc.ChromeOptions()
+            options.add_argument('--start-maximized')
+            options.add_argument('--disable-gpu')
+            options.add_argument('--no-sandbox')
+            options.add_argument('--disable-dev-shm-usage')
+            options.add_argument('--disable-extensions')
+            options.add_argument('--disable-software-rasterizer')
+            options.add_argument('--disable-features=TranslateUI')
+            options.add_argument('--disable-features=IsolateOrigins,site-per-process')
+            options.add_argument('--disable-site-isolation-trials')
+            options.add_argument('--ignore-certificate-errors')
+            options.add_argument('--ignore-ssl-errors')
+            options.add_argument('--disable-popup-blocking')
+            options.add_argument('--disable-notifications')
+            options.add_argument('--disable-infobars')
+            options.add_argument('--disable-blink-features=AutomationControlled')
+            options.add_argument('--disable-web-security')
+            options.add_argument('--allow-running-insecure-content')
+            options.add_argument('--no-first-run')
+            options.add_argument('--no-default-browser-check')
+            options.add_argument('--password-store=basic')
+            options.add_argument('--use-mock-keychain')
+            options.add_argument('--disable-blink-features')
+            options.add_argument('--disable-blink-features=AutomationControlled')
+            options.add_argument('--disable-extensions-except=')
+            options.add_argument('--disable-component-extensions-with-background-pages')
+            options.add_argument('--disable-background-networking')
+            options.add_argument('--disable-background-timer-throttling')
+            options.add_argument('--disable-backgrounding-occluded-windows')
+            options.add_argument('--disable-breakpad')
+            options.add_argument('--disable-component-update')
+            options.add_argument('--disable-domain-reliability')
+            options.add_argument('--disable-features=AudioServiceOutOfProcess')
+            options.add_argument('--disable-hang-monitor')
+            options.add_argument('--disable-ipc-flooding-protection')
+            options.add_argument('--disable-prompt-on-repost')
+            options.add_argument('--disable-renderer-backgrounding')
+            options.add_argument('--disable-sync')
+            options.add_argument('--force-color-profile=srgb')
+            options.add_argument('--metrics-recording-only')
+            options.add_argument('--no-pings')
+            options.add_argument('--no-zygote')
+            options.add_argument('--use-gl=swiftshader')
+            options.add_argument('--window-size=1920,1080')
             
-            # Проверяем, вошли ли мы в систему, ища никнейм "Botir_Nomozov"
-            try:
-                # Проверяем наличие никнейма
-                nickname_element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#dashboard-userinfo-nickname")))
-                nickname_text = nickname_element.text
-                
-                if "Botir_Nomozov" in nickname_text:
-                    print("Успешно вошли в аккаунт! Обнаружен никнейм: Botir_Nomozov")
-                    
-                    # Замените на свои данные
-                    bot_token = "5859176664:AAEoXNcof-a92yH04l_yhk2WW7tD511kd6Y"
-                    chat_id = "-1002599964439"
-                    
-                    # Получаем и отправляем информацию о позициях
-                    positions = get_and_send_positions(driver, wait, bot_token, chat_id)
-                    
-                    # Запускаем цикл обновления страницы и проверки новых позиций
-                    print("Запускаем цикл обновления страницы и проверки новых позиций...")
-                    last_refresh_time = time.time()
-                    
-                    while True:
-                        try:
-                            current_time = time.time()
-                            # Обновляем страницу каждые 7-8 секунд
-                            if current_time - last_refresh_time >= random.uniform(7, 8):
-                                print("Обновляем страницу...")
-                                driver.refresh()
-                                last_refresh_time = current_time
-                                
-                                # Ждем загрузки страницы
-                                time.sleep(15)
-                                
-                                # Проверяем и обрабатываем процесс входа
-                                if check_and_handle_login(driver, wait):
-                                    print("Процесс входа запущен успешно")
-                                else:
-                                    print("Кнопка входа не найдена или процесс входа не удался")
-
-                                # Проверяем наличие новых позиций
-                                try:
-                                    positions = driver.find_elements(By.CSS_SELECTOR, "div.css-1wr4jig")
-                                    if positions:
-                                        for position in positions:
-                                            try:
-                                                symbol = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                side = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                size = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                entry_price = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                mark_price = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                pnl = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                
-                                                message = f"Новая позиция:\nСимвол: {symbol}\nСторона: {side}\nРазмер: {size}\nЦена входа: {entry_price}\nТекущая цена: {mark_price}\nPnL: {pnl}"
-                                                send_to_telegram(bot_token, chat_id, message)
-                                            except Exception as e:
-                                                print(f"Ошибка при обработке позиции: {e}")
-                                except Exception as e:
-                                    print(f"Ошибка при поиске позиций: {e}")
-                                
-                                # Получаем и отправляем информацию о новых позициях
-                                positions = get_and_send_positions(driver, wait, bot_token, chat_id, positions)
-                            
-                            # Проверяем, не разлогинились ли мы
-                            try:
-                                # Проверяем наличие кнопки "Log In" при каждом обновлении
-                                try:
-                                    login_link = driver.find_element(By.CSS_SELECTOR, "a.link.cursor-pointer.text-TextLink.no-underline[href='/login']")
-                                    print("Обнаружена кнопка Log In. Нажимаем на нее...")
-                                    login_link.click()
-                                    
-                                    # Ждем появления кнопки "Continue with Telegram"
-                                    telegram_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button[aria-label='Continue with Telegram']")))
-                                    telegram_button.click()
-                                    
-                                    # Ждем появления кнопки "Connect" и нажимаем на нее
-                                    connect_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button.bn-button.bn-button__primary.data-size-large.w-full.mt-6")))
-                                    connect_button.click()
-                                    
-                                    print("Нажали на кнопку Connect. Ждем, пока вы войдете в систему...")
-                                    
-                                    # Ждем 20 секунд, чтобы дать время на вход в систему
-                                    time.sleep(20)
-                                    
-                                    # Возвращаемся на страницу лидерборда
-                                    print("Возвращаемся на страницу профиля пользователя в лидерборде...")
-                                    driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-                                    print("Успешно вернулись на страницу профиля пользователя в лидерборде!")
-                                except (NoSuchElementException, TimeoutException):
-                                    # Кнопка "Log In" не найдена, продолжаем проверку никнейма
-                                    pass
-                                
-                                nickname_element = driver.find_element(By.CSS_SELECTOR, "#dashboard-userinfo-nickname")
-                                nickname_text = nickname_element.text
-                                
-                                if "Botir_Nomozov" not in nickname_text:
-                                    print(f"Обнаружен никнейм: {nickname_text}, но это не Botir_Nomozov. Перезагружаем страницу...")
-                                    driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-                                    break
-                                
-                                # Проверяем наличие новых позиций
-                                try:
-                                    positions = driver.find_elements(By.CSS_SELECTOR, "div.css-1wr4jig")
-                                    if positions:
-                                        for position in positions:
-                                            try:
-                                                symbol = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                side = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                size = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                entry_price = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                mark_price = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                pnl = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                
-                                                message = f"Новая позиция:\nСимвол: {symbol}\nСторона: {side}\nРазмер: {size}\nЦена входа: {entry_price}\nТекущая цена: {mark_price}\nPnL: {pnl}"
-                                                send_to_telegram(bot_token, chat_id, message)
-                                            except (NoSuchElementException, WebDriverException) as e:
-                                                print(f"Ошибка при обработке позиции: {e}")
-                                except (NoSuchElementException, WebDriverException) as e:
-                                    print(f"Ошибка при поиске позиций: {e}")
-                            except (NoSuchElementException, WebDriverException):
-                                print("Сессия истекла или вы не вошли в систему. Перезагружаем страницу...")
-                                driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-                                break
-                            
-                            # Небольшая пауза перед следующей проверкой
-                            time.sleep(1)
-                            
-                        except Exception as e:
-                            print(f"Ошибка в цикле обновления: {str(e)}")
-                            print("Пробуем перезагрузить страницу...")
-                            try:
-                                driver.refresh()
-                            except:
-                                driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-                            time.sleep(15)
-                else:
-                    print(f"Обнаружен никнейм: {nickname_text}, но это не Botir_Nomozov. Продолжаем проверку...")
-            except (TimeoutException, NoSuchElementException):
-                print("Не удалось определить, вошли ли вы в систему. Продолжаем проверку...")
+            # Инициализация драйвера Chrome
+            driver = None
+            max_retries = 3
+            retry_count = 0
             
-            # Держим браузер открытым
+            while retry_count < max_retries:
+                try:
+                    print("🔄 Инициализация Chrome...")
+                    driver = uc.Chrome(options=options, version_main=114)  # Указываем конкретную версию Chrome
+                    driver.set_page_load_timeout(60)
+                    print("✅ Chrome успешно инициализирован")
+                    break
+                except Exception as e:
+                    print(f"❌ Ошибка при инициализации драйвера (попытка {retry_count + 1}/{max_retries}): {str(e)}")
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        print("⚠️ Пожалуйста, проверьте подключение к VPN и нажмите Enter для продолжения...")
+                        input()
+                        time.sleep(10)
+                    else:
+                        print("❌ Превышено максимальное количество попыток, перезапускаем скрипт...")
+                        if driver:
+                            driver.quit()
+                        time.sleep(60)
+                        return
+            
+            # Открытие страницы лидерборда
+            max_page_retries = 3
+            page_retry_count = 0
+            
+            while page_retry_count < max_page_retries:
+                try:
+                    print("🌐 Переходим на страницу профиля...")
+                    driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
+                    break
+                except WebDriverException as e:
+                    print(f"❌ Ошибка при подключении к Binance (попытка {page_retry_count + 1}/{max_page_retries}): {str(e)}")
+                    page_retry_count += 1
+                    if page_retry_count < max_page_retries:
+                        print("⚠️ Пожалуйста, проверьте подключение к VPN и нажмите Enter для продолжения...")
+                        input()
+                        time.sleep(10)
+                    else:
+                        print("❌ Превышено максимальное количество попыток загрузки страницы")
+                        if driver:
+                            driver.quit()
+                        time.sleep(60)
+                        return
+            
+            wait = WebDriverWait(driver, 30)
+            positions = None
+            last_refresh_time = time.time()
+            error_count = 0
+            max_errors = 5
+            network_error_count = 0
+            max_network_errors = 3
+            
             while True:
                 try:
-                    # Проверяем, не разлогинились ли мы, ища никнейм
-                    nickname_element = driver.find_element(By.CSS_SELECTOR, "#dashboard-userinfo-nickname")
-                    nickname_text = nickname_element.text
-                    
-                    if "Botir_Nomozov" in nickname_text:
-                        print(f"Вы все еще вошли в систему как: {nickname_text}")
+                    current_time = time.time()
+                    if current_time - last_refresh_time >= random.uniform(10, 15):
+                        print("\n🔄 Начало цикла обновления")
                         
-                        # Проверяем, находимся ли мы на странице профиля пользователя в лидерборде
-                        current_url = driver.current_url
-                        if "futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2" not in current_url:
-                            print("Переходим на страницу профиля пользователя в лидерборде...")
-                            driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-                            print("Успешно перешли на страницу профиля пользователя в лидерборде!")
-                            
-                            # Замените на свои данные
-                            bot_token = "5859176664:AAEoXNcof-a92yH04l_yhk2WW7tD511kd6Y"
-                            chat_id = "-1002599964439"
-                            
-                            # Получаем и отправляем информацию о позициях
-                            positions = get_and_send_positions(driver, wait, bot_token, chat_id)
-                            
-                            # Запускаем цикл обновления страницы и проверки новых позиций
-                            print("Запускаем цикл обновления страницы и проверки новых позиций...")
-                            last_refresh_time = time.time()
-                            
-                            while True:
-                                try:
-                                    current_time = time.time()
-                                    # Обновляем страницу каждые 7-8 секунд
-                                    if current_time - last_refresh_time >= random.uniform(7, 8):
-                                        print("Обновляем страницу...")
-                                        driver.refresh()
-                                        last_refresh_time = current_time
-                                        
-                                        # Ждем загрузки страницы
-                                        time.sleep(15)
-                                        
-                                        # Проверяем и обрабатываем процесс входа
-                                        if check_and_handle_login(driver, wait):
-                                            print("Процесс входа запущен успешно")
-                                        else:
-                                            print("Кнопка входа не найдена или процесс входа не удался")
-
-                                        # Проверяем наличие новых позиций
-                                        try:
-                                            positions = driver.find_elements(By.CSS_SELECTOR, "div.css-1wr4jig")
-                                            if positions:
-                                                for position in positions:
-                                                    try:
-                                                        symbol = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                        side = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                        size = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                        entry_price = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                        mark_price = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                        pnl = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                        
-                                                        message = f"Новая позиция:\nСимвол: {symbol}\nСторона: {side}\nРазмер: {size}\nЦена входа: {entry_price}\nТекущая цена: {mark_price}\nPnL: {pnl}"
-                                                        send_to_telegram(bot_token, chat_id, message)
-                                                    except Exception as e:
-                                                        print(f"Ошибка при обработке позиции: {e}")
-                                        except Exception as e:
-                                            print(f"Ошибка при поиске позиций: {e}")
-                                    
-                                    # Получаем и отправляем информацию о новых позициях
-                                    positions = get_and_send_positions(driver, wait, bot_token, chat_id, positions)
-                                    
-                                    # Проверяем, не разлогинились ли мы
-                                    try:
-                                        # Проверяем наличие кнопки "Log In" при каждом обновлении
-                                        try:
-                                            login_link = driver.find_element(By.CSS_SELECTOR, "a.link.cursor-pointer.text-TextLink.no-underline[href='/login']")
-                                            print("Обнаружена кнопка Log In. Нажимаем на нее...")
-                                            login_link.click()
-                                            
-                                            # Ждем появления кнопки "Continue with Telegram"
-                                            telegram_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button[aria-label='Continue with Telegram']")))
-                                            telegram_button.click()
-                                            
-                                            # Ждем появления кнопки "Connect" и нажимаем на нее
-                                            connect_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button.bn-button.bn-button__primary.data-size-large.w-full.mt-6")))
-                                            connect_button.click()
-                                            
-                                            print("Нажали на кнопку Connect. Ждем, пока вы войдете в систему...")
-                                            
-                                            # Ждем 20 секунд, чтобы дать время на вход в систему
-                                            time.sleep(20)
-                                            
-                                            # Возвращаемся на страницу лидерборда
-                                            print("Возвращаемся на страницу профиля пользователя в лидерборде...")
-                                            driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-                                            print("Успешно вернулись на страницу профиля пользователя в лидерборде!")
-                                        except (NoSuchElementException, TimeoutException):
-                                            # Кнопка "Log In" не найдена, продолжаем проверку никнейма
-                                            pass
-                                        
-                                        nickname_element = driver.find_element(By.CSS_SELECTOR, "#dashboard-userinfo-nickname")
-                                        nickname_text = nickname_element.text
-                                        
-                                        if "Botir_Nomozov" not in nickname_text:
-                                            print(f"Обнаружен никнейм: {nickname_text}, но это не Botir_Nomozov. Перезагружаем страницу...")
-                                            driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-                                            break
-                                    except (NoSuchElementException, WebDriverException):
-                                        print("Сессия истекла или вы не вошли в систему. Перезагружаем страницу...")
-                                        driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-                                        break
-                                    
-                                    # Небольшая пауза перед следующей проверкой
-                                    time.sleep(1)
-                                    
-                                except Exception as e:
-                                    print(f"Ошибка в цикле обновления: {str(e)}")
-                                    print("Пробуем перезагрузить страницу...")
-                                    try:
-                                        driver.refresh()
-                                    except:
-                                        driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-                                    time.sleep(15)
-                    else:
-                        print(f"Обнаружен никнейм: {nickname_text}, но это не Botir_Nomozov")
-                    
-                    time.sleep(10)  # Проверяем каждые 10 секунд
-                except (NoSuchElementException, WebDriverException):
-                    print("Сессия истекла или вы не вошли в систему. Обновляем страницу...")
-                    try:
-                        driver.refresh()  # Обновляем страницу
-                        time.sleep(15)  # Ждем загрузки страницы
+                        # Очистка памяти
+                        if hasattr(driver, 'execute_script'):
+                            driver.execute_script("window.gc();")
                         
-                        # Проверяем и обрабатываем процесс входа
-                        if check_and_handle_login(driver, wait):
-                            print("Процесс входа запущен успешно")
-                        else:
-                            print("Кнопка входа не найдена или процесс входа не удался")
-                        
-                        # Проверяем наличие новых позиций
+                        # Обновляем страницу
+                        print("🔄 Обновляем страницу...")
                         try:
-                            positions = driver.find_elements(By.CSS_SELECTOR, "div.css-1wr4jig")
-                            if positions:
-                                for position in positions:
-                                    try:
-                                        symbol = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                        side = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                        size = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                        entry_price = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                        mark_price = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                        pnl = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                        
-                                        message = f"Новая позиция:\nСимвол: {symbol}\nСторона: {side}\nРазмер: {size}\nЦена входа: {entry_price}\nТекущая цена: {mark_price}\nPnL: {pnl}"
-                                        send_to_telegram(bot_token, chat_id, message)
-                                    except Exception as e:
-                                        print(f"Ошибка при обработке позиции: {e}")
-                        except Exception as e:
-                            print(f"Ошибка при поиске позиций: {e}")
-                    except:
-                        print("Не удалось обновить страницу, пробуем загрузить заново...")
-                        try:
-                            driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-                            
-                            # Ждем загрузки страницы
-                            time.sleep(15)
-                            
-                            # Проверяем и обрабатываем процесс входа
-                            if check_and_handle_login(driver, wait):
-                                print("Процесс входа запущен успешно")
-                            else:
-                                print("Кнопка входа не найдена или процесс входа не удался")
-                            
-                            # Проверяем наличие новых позиций
-                            try:
-                                positions = driver.find_elements(By.CSS_SELECTOR, "div.css-1wr4jig")
-                                if positions:
-                                    for position in positions:
-                                        try:
-                                            symbol = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                            side = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                            size = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                            entry_price = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                            mark_price = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                            pnl = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                            
-                                            message = f"Новая позиция:\nСимвол: {symbol}\nСторона: {side}\nРазмер: {size}\nЦена входа: {entry_price}\nТекущая цена: {mark_price}\nPnL: {pnl}"
-                                            send_to_telegram(bot_token, chat_id, message)
-                                        except Exception as e:
-                                            print(f"Ошибка при обработке позиции: {e}")
-                            except Exception as e:
-                                print(f"Ошибка при поиске позиций: {e}")
-                        except:
-                            print("Не удалось загрузить страницу. Пожалуйста, проверьте VPN и нажмите Enter...")
-                            input()
-                            try:
-                                driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-                                
-                                # Ждем загрузки страницы
-                                time.sleep(15)
-                                
-                                # Проверяем и обрабатываем процесс входа
-                                if check_and_handle_login(driver, wait):
-                                    print("Процесс входа запущен успешно")
-                                else:
-                                    print("Кнопка входа не найдена или процесс входа не удался")
-                                
-                                # Проверяем наличие новых позиций
-                                try:
-                                    positions = driver.find_elements(By.CSS_SELECTOR, "div.css-1wr4jig")
-                                    if positions:
-                                        for position in positions:
-                                            try:
-                                                symbol = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                side = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                size = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                entry_price = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                mark_price = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                pnl = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                
-                                                message = f"Новая позиция:\nСимвол: {symbol}\nСторона: {side}\nРазмер: {size}\nЦена входа: {entry_price}\nТекущая цена: {mark_price}\nPnL: {pnl}"
-                                                send_to_telegram(bot_token, chat_id, message)
-                                            except Exception as e:
-                                                print(f"Ошибка при обработке позиции: {e}")
-                                except Exception as e:
-                                    print(f"Ошибка при поиске позиций: {e}")
-                            except:
-                                print("Все еще не удается загрузить страницу. Пожалуйста, проверьте VPN и нажмите Enter...")
+                            driver.refresh()
+                        except WebDriverException as e:
+                            print(f"❌ Ошибка при обновлении страницы: {str(e)}")
+                            network_error_count += 1
+                            if network_error_count >= max_network_errors:
+                                print("⚠️ Пожалуйста, проверьте подключение к VPN и нажмите Enter для продолжения...")
                                 input()
-                                driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-                                
-                                # Ждем загрузки страницы
-                                time.sleep(15)
-                                
-                                # Проверяем и обрабатываем процесс входа
-                                if check_and_handle_login(driver, wait):
-                                    print("Процесс входа запущен успешно")
-                                else:
-                                    print("Кнопка входа не найдена или процесс входа не удался")
-                                
-                                # Проверяем наличие новых позиций
-                                try:
-                                    positions = driver.find_elements(By.CSS_SELECTOR, "div.css-1wr4jig")
-                                    if positions:
-                                        for position in positions:
-                                            try:
-                                                symbol = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                side = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                size = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                entry_price = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                mark_price = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                pnl = position.find_element(By.CSS_SELECTOR, "div.css-1wr4jig div.css-1wr4jig").text
-                                                
-                                                message = f"Новая позиция:\nСимвол: {symbol}\nСторона: {side}\nРазмер: {size}\nЦена входа: {entry_price}\nТекущая цена: {mark_price}\nPnL: {pnl}"
-                                                send_to_telegram(bot_token, chat_id, message)
-                                            except Exception as e:
-                                                print(f"Ошибка при обработке позиции: {e}")
-                                except Exception as e:
-                                    print(f"Ошибка при поиске позиций: {e}")
-                    time.sleep(15)  # Ждем 15 секунд перед следующей проверкой
-            
-        except (TimeoutException, NoSuchElementException, WebDriverException) as e:
-            print(f"Произошла ошибка: {str(e)}")
-            print("Обновляем страницу и пробуем снова...")
-            try:
-                driver.refresh()  # Обновляем страницу
-            except:
-                print("Не удалось обновить страницу, пробуем загрузить заново...")
-                try:
-                    driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-                except:
-                    print("Не удалось загрузить страницу. Пожалуйста, проверьте VPN и нажмите Enter...")
-                    input()
+                                network_error_count = 0
+                                continue
+                            time.sleep(30)
+                            continue
+                        
+                        last_refresh_time = current_time
+                        time.sleep(20)
+                        
+                        # Проверяем все условия
+                        if not check_all_conditions(driver, wait):
+                            print("❌ Условия не выполнены, пробуем войти заново...")
+                            if handle_login_process(driver, wait):
+                                print("✅ Успешный вход")
+                                error_count = 0
+                                network_error_count = 0
+                            else:
+                                error_count += 1
+                                if error_count >= max_errors:
+                                    print("❌ Слишком много ошибок, перезапускаем браузер...")
+                                    break
+                                continue
+                        
+                        # Получаем и отправляем информацию о позициях
+                        positions = get_and_send_positions(driver, wait, bot_token, chat_id, positions)
+                        error_count = 0
+                        network_error_count = 0
+                    
+                    time.sleep(2)
+                except Exception as e:
+                    print(f"❌ Ошибка в цикле обновления: {str(e)}")
+                    traceback.print_exc()
+                    error_count += 1
+                    
+                    if error_count >= max_errors:
+                        print("❌ Слишком много ошибок, перезапускаем браузер...")
+                        break
+                    
+                    print("🔄 Пробуем перезагрузить страницу...")
                     try:
-                        driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
+                        driver.refresh()
                     except:
-                        print("Все еще не удается загрузить страницу. Пожалуйста, проверьте VPN и нажмите Enter...")
+                        print("⚠️ Пожалуйста, проверьте подключение к VPN и нажмите Enter для продолжения...")
                         input()
                         driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-            time.sleep(15)  # Ждем 15 секунд перед следующей попыткой
-        except Exception as e:
-            print(f"Неожиданная ошибка: {str(e)}")
-            print("Пробуем перезагрузить страницу...")
-            try:
-                driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-            except:
-                print("Не удалось загрузить страницу. Пожалуйста, проверьте VPN и нажмите Enter...")
-                input()
+                    time.sleep(30)
+            
+            # Закрываем браузер перед перезапуском
+            if driver:
                 try:
-                    driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
+                    driver.quit()
                 except:
-                    print("Все еще не удается загрузить страницу. Пожалуйста, проверьте VPN и нажмите Enter...")
-                    input()
-                    driver.get('https://www.binance.com/en/futures-activity/leaderboard/user/um?encryptedUid=BC95584834876A747DCD0AE56B3EA1A2')
-            time.sleep(15)  # Ждем 15 секунд перед следующей попыткой
+                    pass
+            
+        except Exception as e:
+            print(f"❌ Критическая ошибка: {str(e)}")
+            traceback.print_exc()
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass
+            print("🔄 Перезапускаем скрипт через 60 секунд...")
+            time.sleep(60)
 
 def run_forever():
     # Бесконечный цикл для перезапуска скрипта в случае критических ошибок
