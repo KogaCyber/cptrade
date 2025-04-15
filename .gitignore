@@ -172,3 +172,23 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Environment variables
+.env
+.env.*
+
+# Logs
+*.log
+logs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Screenshots
+screenshots/
+*.png
+*.jpg
+*.jpeg
