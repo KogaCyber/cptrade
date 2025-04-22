@@ -591,85 +591,148 @@ class AuthManager:
             return False, f"Ошибка при ожидании никнейма пользователя: {str(e)}"
             
     def check_auth_after_login(self) -> Tuple[bool, str]:
-        """
-        Проверяет авторизацию после первого входа:
-        1. Ждет 30 секунд
-        2. Переходит на страницу логина
-        3. Повторяет процесс авторизации
-        
-        Returns:
-            Tuple[bool, str]: (успех, сообщение)
-        """
+        """Проверка авторизации после входа"""
         try:
             # Ждем 30 секунд после первого входа
             self.logger.info("⏳ Ожидание 30 секунд после первого входа...")
             time.sleep(30)
             
             # Переходим на страницу логина
+            self.logger.info("🌐 Переход на страницу логина...")
             self.driver.get("https://accounts.binance.com/en/login")
-            self.logger.info("🌐 Переход на страницу логина Binance для автоматического входа")
             
             # Ждем загрузки страницы
-            WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.TAG_NAME, "body"))
-            )
-            
-            # Шаг 1: Нажимаем кнопку "Continue with Telegram"
-            telegram_button = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Continue with Telegram']"))
-            )
-            telegram_button.click()
-            self.logger.info("✅ Нажата кнопка 'Continue with Telegram'")
-            
-            # Шаг 2: Ждем появления кнопки "Connect" и нажимаем её
-            connect_button = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Connect']"))
-            )
-            connect_button.click()
-            self.logger.info("✅ Нажата кнопка 'Connect'")
-            
-            # Шаг 3: Ждем 30 секунд для получения сообщения в Telegram
-            self.logger.info("⏳ Ожидание сообщения в Telegram (30 секунд)...")
+            if not self.timeout_manager.wait_for_page_load():
+                return False, "Ошибка загрузки страницы логина"
+                
+            # Нажимаем кнопку "Continue with Telegram"
+            self.logger.info("🔘 Нажатие кнопки 'Continue with Telegram'...")
+            try:
+                telegram_button = WebDriverWait(self.driver, 10).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "button.bn-button.bn-button__icon.bn-button__icon__line.data-size-large.icon-button.mt-4"))
+                )
+                telegram_button.click()
+            except Exception as e:
+                self.logger.error(f"❌ Ошибка при нажатии кнопки Telegram: {str(e)}")
+                return False, "Ошибка при нажатии кнопки Telegram"
+                
+            # Нажимаем кнопку "Connect"
+            self.logger.info("🔘 Нажатие кнопки 'Connect'...")
+            try:
+                connect_button = WebDriverWait(self.driver, 10).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "button.bn-button.bn-button__primary.data-size-large.w-full.mt-6"))
+                )
+                connect_button.click()
+            except Exception as e:
+                self.logger.error(f"❌ Ошибка при нажатии кнопки Connect: {str(e)}")
+                return False, "Ошибка при нажатии кнопки Connect"
+                
+            # Ждем 30 секунд для получения сообщения в Telegram
+            self.logger.info("⏳ Ожидание сообщения в Telegram...")
             time.sleep(30)
             
-            # Шаг 4: Проверяем наличие кнопки "Resend" и нажимаем её если нужно
+            # Бесконечный цикл для нажатия кнопки Resend
+            while True:
+                try:
+                    # Проверяем наличие кнопки "Resend"
+                    self.logger.info("🔍 Поиск кнопки 'Resend'...")
+                    try:
+                        # Пробуем найти кнопку по разным селекторам
+                        selectors = [
+                            (By.CSS_SELECTOR, "div.bn-mfa-modal button.bn-button.bn-button__primary.data-size-large.bn-mfa-roaming-button"),
+                            (By.XPATH, "//div[contains(@class, 'bn-mfa-modal')]//button[@aria-label='Resend']"),
+                            (By.CSS_SELECTOR, "div.bn-mfa-modal button[aria-label='Resend']"),
+                            (By.CSS_SELECTOR, "div.bn-mfa-modal button.bn-mfa-roaming-button")
+                        ]
+                        
+                        resend_button = None
+                        for by, selector in selectors:
+                            try:
+                                self.logger.info(f"🔍 Пробуем найти кнопку по селектору: {selector}")
+                                resend_button = WebDriverWait(self.driver, 5).until(
+                                    EC.presence_of_element_located((by, selector))
+                                )
+                                if resend_button:
+                                    self.logger.info(f"✅ Кнопка найдена по селектору: {selector}")
+                                    break
+                            except TimeoutException:
+                                self.logger.info(f"ℹ️ Кнопка не найдена по селектору: {selector}")
+                                continue
+                                
+                        if not resend_button:
+                            self.logger.error("❌ Кнопка 'Resend' не найдена ни по одному селектору")
+                            # Проверяем, есть ли другие элементы на странице
+                            try:
+                                elements = self.driver.find_elements(By.TAG_NAME, "button")
+                                self.logger.info(f"ℹ️ Найдено {len(elements)} кнопок на странице")
+                                for element in elements:
+                                    self.logger.info(f"ℹ️ Кнопка: {element.get_attribute('outerHTML')}")
+                            except Exception as e:
+                                self.logger.error(f"❌ Ошибка при проверке кнопок: {str(e)}")
+                            raise TimeoutException("Кнопка 'Resend' не найдена")
+                            
+                        # Нажимаем кнопку Resend
+                        self.logger.info("🔘 Нажатие кнопки 'Resend'...")
+                        resend_button.click()
+                        
+                        # Отправляем сообщение в Telegram
+                        telegram_manager = TelegramManager()
+                        if telegram_manager.is_configured():
+                            telegram_manager.send_message("⚠️ Пожалуйста, подтвердите вход в Binance")
+                        
+                        # Ждем 30 секунд перед следующей попыткой
+                        self.logger.info("⏳ Ожидание 30 секунд перед следующей попыткой...")
+                        time.sleep(30)
+                        
+                    except TimeoutException:
+                        # Если кнопка Resend не найдена, проверяем наличие следующих шагов
+                        try:
+                            # Проверяем наличие чекбокса "Don't show this message again"
+                            checkbox = WebDriverWait(self.driver, 5).until(
+                                EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='checkbox']"))
+                            )
+                            if checkbox.is_displayed() and checkbox.is_enabled():
+                                self.logger.info("✅ Найден чекбокс 'Don't show this message again'")
+                                checkbox.click()
+                                break
+                        except TimeoutException:
+                            pass
+                            
+                        try:
+                            # Проверяем наличие кнопки "Yes"
+                            yes_button = WebDriverWait(self.driver, 5).until(
+                                EC.presence_of_element_located((By.CSS_SELECTOR, "button[data-testid='yes-button']"))
+                            )
+                            if yes_button.is_displayed() and yes_button.is_enabled():
+                                self.logger.info("✅ Найдена кнопка 'Yes'")
+                                yes_button.click()
+                                break
+                        except TimeoutException:
+                            pass
+                            
+                        # Если ни один из следующих шагов не найден, продолжаем цикл
+                        self.logger.info("ℹ️ Кнопка 'Resend' не найдена, продолжаем поиск...")
+                        time.sleep(5)
+                        
+                except Exception as e:
+                    self.logger.error(f"❌ Ошибка при работе с кнопкой Resend: {str(e)}")
+                    time.sleep(5)
+                    
+            # Ждем завершения авторизации
+            self.logger.info("⏳ Ожидание завершения авторизации...")
             try:
-                resend_button = WebDriverWait(self.driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Resend']"))
+                WebDriverWait(self.driver, 30).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "#dashboard-userinfo-nickname"))
                 )
-                resend_button.click()
-                self.logger.info("✅ Нажата кнопка 'Resend'")
-                time.sleep(30)  # Ждем еще 30 секунд
+                self.logger.info("✅ Авторизация успешно завершена")
+                return True, "Авторизация успешно завершена"
             except TimeoutException:
-                self.logger.info("ℹ️ Кнопка 'Resend' не найдена, продолжаем...")
-            
-            # Шаг 5: Ждем появления чекбокса "Don't show this message again"
-            try:
-                checkbox = WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.XPATH, "//div[@role='checkbox' and contains(@class, 'stay-signed-in-checkbox')]"))
-                )
-                checkbox.click()
-                self.logger.info("✅ Отмечен чекбокс 'Don't show this message again'")
-            except TimeoutException:
-                self.logger.warning("⚠️ Чекбокс 'Don't show this message again' не найден")
-            
-            # Шаг 6: Ждем появления кнопки "Yes" и нажимаем её
-            try:
-                yes_button = WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Yes']"))
-                )
-                yes_button.click()
-                self.logger.info("✅ Нажата кнопка 'Yes'")
-            except TimeoutException:
-                self.logger.warning("⚠️ Кнопка 'Yes' не найдена")
-            
-            # Шаг 7: Ждем завершения аутентификации
-            success, message = self._wait_for_login_completion()
-            if not success:
-                return False, message
+                self.logger.error("❌ Таймаут при ожидании завершения авторизации")
+                return False, "Таймаут при ожидании завершения авторизации"
+            except Exception as e:
+                self.logger.error(f"❌ Ошибка при ожидании завершения авторизации: {str(e)}")
+                return False, "Ошибка при ожидании завершения авторизации"
                 
-            return True, "Автоматический вход успешно выполнен"
-            
         except Exception as e:
-            self.logger.error("❌ Ошибка при автоматическом входе", exc_info=e)
-            return False, f"Ошибка при автоматическом входе: {str(e)}" 
+            self.logger.error(f"❌ Ошибка при проверке авторизации: {str(e)}")
+            return False, f"Ошибка при проверке авторизации: {str(e)}" 
