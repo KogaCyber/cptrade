@@ -150,6 +150,7 @@ def open_binance_page(url, thread_id):
         
         # Инициализация менеджеров
         page_manager = PageManager(driver)
+        auth_manager = AuthManager(driver)
         
         # Проверяем VPN
         vpn_checker = VPNChecker(driver)
@@ -180,6 +181,15 @@ def open_binance_page(url, thread_id):
             )
             nickname = driver.find_element(By.CSS_SELECTOR, "#dashboard-userinfo-nickname").text
             logger.info(f"✅ Пользователь авторизован: {nickname} (Поток {thread_id})")
+            
+            # После успешного входа запускаем проверку авторизации
+            logger.info("⏳ Запуск проверки авторизации...")
+            success, message = auth_manager.check_auth_after_login()
+            if not success:
+                logger.error(f"❌ Ошибка при проверке авторизации: {message}")
+                return
+            logger.info("✅ Проверка авторизации успешно завершена")
+            
         except TimeoutException:
             logger.error(f"❌ Не удалось найти элемент с никнеймом пользователя (Поток {thread_id})")
             return

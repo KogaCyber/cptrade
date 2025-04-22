@@ -1,0 +1,10 @@
+{
+    "urls": [
+        "https://accounts.binance.com/en/login"
+    ],
+    "settings": {
+        "refresh_interval": 30,
+        "max_retries": 3,
+        "timeout": 10
+    }
+} 

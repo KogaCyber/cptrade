@@ -1,0 +1,49 @@
+{
+    "login": {
+        "email_input": [
+            "input[type='email']",
+            "input[name='email']",
+            "#email",
+            ".email-input"
+        ],
+        "password_input": [
+            "input[type='password']",
+            "input[name='password']",
+            "#password",
+            ".password-input"
+        ],
+        "submit_button": [
+            "button[type='submit']",
+            ".login-button",
+            "#login-button",
+            "button:contains('Log In')"
+        ],
+        "2fa_input": [
+            "input[type='text']",
+            "#2fa-code",
+            ".2fa-input"
+        ],
+        "2fa_submit": [
+            "button[type='submit']",
+            ".verify-button",
+            "#verify-button"
+        ]
+    },
+    "dashboard": {
+        "container": [
+            ".dashboard-container",
+            "#dashboard",
+            "main.dashboard"
+        ],
+        "logout_button": [
+            ".logout-button",
+            "#logout",
+            "button:contains('Log Out')"
+        ],
+        "confirm_logout": [
+            ".confirm-logout",
+            "#confirm-logout",
+            "button:contains('Confirm')"
+        ]
+    }
+} 
